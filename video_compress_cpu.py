@@ -283,6 +283,8 @@ def encode_video(
     if two_pass:
         # Two-pass encoding for better bitrate accuracy
         tmpdir = 'tmp/'
+        if not os.path.exists(tmpdir):
+            os.makedirs(tmpdir)
         passlog = os.path.join(tmpdir, 'ffmpeg2pass')
         
         # First pass

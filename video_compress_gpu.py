@@ -287,58 +287,60 @@ def encode_video(
     
     if two_pass:
         # Two-pass encoding with NVENC
-        with tempfile.TemporaryDirectory() as tmpdir:
-            stats_file = os.path.join(tmpdir, 'nvenc_stats')
-            
-            # First pass
-            print("Running first pass...")
-            pass1_args = [
-                'ffmpeg',
-                '-y',
-                '-i', input_file,
-                '-vf', vf_string,
-                '-c:v', 'hevc_nvenc',
-                '-preset', 'p7',
-                '-tune', 'hq',
-                '-profile:v', 'main10',
-                '-pix_fmt', 'p010le',
-                '-rc', 'vbr',
-                '-b:v', f'{video_bitrate_kbps}k',
-                '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
-                '-bufsize', f'{bufsize_kbps}k',
-                '-spatial-aq', '1',
-                '-temporal-aq', '1',
-                '-rc-lookahead', '32',
-                '-multipass', 'fullres',
-                '-an',  # No audio in first pass
-                '-f', 'null',
-                '/dev/null' if os.name != 'nt' else 'NUL'
-            ]
-            
-            result = subprocess.run(pass1_args, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"First pass failed: {result.stderr}")
-                # Fall back to single pass
-                print("Falling back to single-pass encoding...")
-                return encode_video(
-                    input_file, output_file, width, height, fps,
-                    video_bitrate_kbps, audio_bitrate_kbps, two_pass=False
-                )
-            
-            # Second pass
-            print("Running second pass...")
-            pass2_args = base_args + [
-                '-b:v', f'{video_bitrate_kbps}k',
-                '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
-                '-bufsize', f'{bufsize_kbps}k',
-                '-multipass', 'fullres',
-                output_file
-            ]
-            
-            result = subprocess.run(pass2_args, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Second pass failed: {result.stderr}")
-                return False
+        tmpdir = 'tmp'
+        if not os.path.exists(tmpdir):
+            os.makedirs(tmpdir)
+        stats_file = os.path.join(tmpdir, 'nvenc_stats')
+        
+        # First pass
+        print("Running first pass...")
+        pass1_args = [
+            'ffmpeg',
+            '-y',
+            '-i', input_file,
+            '-vf', vf_string,
+            '-c:v', 'hevc_nvenc',
+            '-preset', 'p7',
+            '-tune', 'hq',
+            '-profile:v', 'main10',
+            '-pix_fmt', 'p010le',
+            '-rc', 'vbr',
+            '-b:v', f'{video_bitrate_kbps}k',
+            '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
+            '-bufsize', f'{bufsize_kbps}k',
+            '-spatial-aq', '1',
+            '-temporal-aq', '1',
+            '-rc-lookahead', '32',
+            '-multipass', 'fullres',
+            '-an',  # No audio in first pass
+            '-f', 'null',
+            '/dev/null' if os.name != 'nt' else 'NUL'
+        ]
+        
+        result = subprocess.run(pass1_args, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"First pass failed: {result.stderr}")
+            # Fall back to single pass
+            print("Falling back to single-pass encoding...")
+            return encode_video(
+                input_file, output_file, width, height, fps,
+                video_bitrate_kbps, audio_bitrate_kbps, two_pass=False
+            )
+        
+        # Second pass
+        print("Running second pass...")
+        pass2_args = base_args + [
+            '-b:v', f'{video_bitrate_kbps}k',
+            '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
+            '-bufsize', f'{bufsize_kbps}k',
+            '-multipass', 'fullres',
+            output_file
+        ]
+        
+        result = subprocess.run(pass2_args, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Second pass failed: {result.stderr}")
+            return False
     else:
         # Single pass encoding
         print("Encoding video...")

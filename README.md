@@ -2,6 +2,7 @@ This application must be run in the command line/terminal, there is no UI. FFMPE
 
 Arguments are:
 
+```text
 video_compressor.exe:
     OPTIONAL ARGUMENTS:
         -h, --help                          show this help message and exit
@@ -14,7 +15,16 @@ video_compressor.exe:
         target_size           Target file size with unit (e.g., 10MB, 500KB, 1GB)
         input_file            Path to input video file
         output_file           Path for output video file
+```
 
 Example usage:
+
+```text
 ./compress_video_cpu.exe 640KB tank.mp4 output.mp4 --fps 30
 ./compress_video_cpu.exe 640KB input.mov output.mp4 --audio-bitrate 32 --invert-aspect-ratio
+```
+
+GPU processing:
+```text
+GPU support is available in `compress_video_gpu.exe` with the same arguments. Make sure your GPU supports NVENC. (Nvidia GPU)
+```
