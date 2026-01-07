@@ -1,4 +1,4 @@
-This application must be run in the command line/terminal, there is no UI. FFMPEG is included in the EXE.
+This application must be run in the command line/terminal, there is no UI.
 
 Arguments are:
 
