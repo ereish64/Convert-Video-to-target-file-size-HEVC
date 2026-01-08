@@ -158,12 +158,18 @@ def calculate_optimal_params(
     # Subtract audio bitrate to get video bitrate budget
     video_bitrate_kbps = total_bitrate_kbps - audio_bitrate_kbps
     
-    # make sure we have enough bits for literally any kind of video
-    if video_bitrate_kbps < 50:
+    # Determine effective FPS for minimum bitrate calculation
+    # Use fixed_fps if provided, otherwise use source fps
+    effective_fps = fixed_fps if fixed_fps is not None else video_info.fps
+    # Scale minimum bitrate by fps (base assumption: 30fps needs 50kbps minimum)
+    fps_factor = effective_fps / 30.0
+    min_video_bitrate = max(50 * fps_factor, 20)  # Floor at 20 kbps absolute minimum
+    
+    if video_bitrate_kbps < min_video_bitrate:
         raise ValueError(
             f"Target size too small. Need at least "
-            f"{int((50 + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
-            f"for a {video_info.duration:.1f}s video"
+            f"{int((min_video_bitrate + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
+            f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
         )
     
     # Define resolution/fps tiers with recommended minimum bitrates for H.265
@@ -263,16 +269,19 @@ def encode_video(
     # Calculate buffer size (typically 1-2x the bitrate)
     bufsize_kbps = max(video_bitrate_kbps, 300)
     
+    # Build video filter string with high-quality lanczos scaling
+    vf_string = f'scale={width}:{height}:flags=lanczos,fps={fps}'
+    
     base_args = [
         './ffmpeg.exe',
         '-y',  # Overwrite output
         '-i', input_file,
-        '-vf', f'scale={width}:{height},fps={fps}',
+        '-vf', vf_string,
         '-c:v', 'libx265',
         '-preset', 'slow',
-        '-profile:v', 'main',
-        '-pix_fmt', 'yuv420p',
-        '-tag:v', 'hvc1',
+        '-profile:v', 'main10',  # 10-bit profile for better quality
+        '-pix_fmt', 'yuv420p10le',  # 10-bit pixel format
+        '-tag:v', 'hvc1',  # For Apple compatibility
         '-c:a', 'aac',
         '-ac', '1',
         '-ar', '22050',
@@ -293,7 +302,7 @@ def encode_video(
             '-b:v', f'{video_bitrate_kbps}k',
             '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
             '-bufsize', f'{bufsize_kbps}k',
-            '-x265-params', f'pass=1:stats={passlog}',
+            '-x265-params', f'pass=1:stats={passlog}:aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
             '-an',  # No audio in first pass
             '-f', 'null',
             '/dev/null' if os.name != 'nt' else 'NUL'
@@ -310,7 +319,7 @@ def encode_video(
             '-b:v', f'{video_bitrate_kbps}k',
             '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
             '-bufsize', f'{bufsize_kbps}k',
-            '-x265-params', f'pass=2:stats={passlog}',
+            '-x265-params', f'pass=2:stats={passlog}:aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
             output_file
         ]
         
@@ -325,6 +334,7 @@ def encode_video(
             '-b:v', f'{video_bitrate_kbps}k',
             '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
             '-bufsize', f'{bufsize_kbps}k',
+            '-x265-params', 'aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
             output_file
         ]
         
@@ -443,6 +453,7 @@ Examples:
     print(f"  FPS: {fps}" + (" (fixed)" if args.fps is not None else " (auto)"))
     print(f"  Video bitrate: {video_bitrate} kbps")
     print(f"  Audio bitrate: {args.audio_bitrate} kbps")
+    print(f"  Encoder: libx265 (10-bit)")
     
     # Calculate expected file size
     expected_size = int((video_bitrate + args.audio_bitrate) * video_info.duration * 1000 / 8)
