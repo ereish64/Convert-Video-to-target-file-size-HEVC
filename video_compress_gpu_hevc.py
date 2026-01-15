@@ -254,54 +254,29 @@ def encode_video(
     fps: float,
     video_bitrate_kbps: int,
     audio_bitrate_kbps: int = 16,
-    two_pass: bool = True
+    two_pass: bool = True,
+    target_bytes: Optional[int] = None,
+    size_tolerance: float = 0.05,
+    video_info: Optional[VideoInfo] = None,
+    fixed_fps: Optional[float] = None
 ) -> bool:
     """
-    Encode video with specified parameters using NVENC.
+    Encode video with specified parameters using NVENC HEVC.
+    
+    If target_bytes is provided, will do an additional calibration pass
+    to adjust for NVENC's bitrate inaccuracy. If video_info is also provided,
+    will recalculate optimal resolution/fps based on adjusted bitrate.
     
     Returns True if successful.
     """
-    # Calculate buffer size (typically 1-2x the bitrate)
-    bufsize_kbps = max(video_bitrate_kbps, 300)
     
-    # Build video filter string with lanczos scaling
-    vf_string = f'scale={width}:{height}:flags=lanczos,fps={fps}'
-    
-    base_args = [
-        'ffmpeg',
-        '-y',  # Overwrite output
-        '-i', input_file,
-        '-vf', vf_string,
-        '-c:v', 'hevc_nvenc',
-        '-preset', 'p7',  # Slowest/highest quality NVENC preset
-        '-tune', 'hq',  # High quality tuning
-        '-profile:v', 'main10',  # 10-bit for better gradients
-        '-pix_fmt', 'p010le',  # 10-bit pixel format for NVENC
-        '-rc', 'vbr',  # Variable bitrate mode
-        '-spatial-aq', '1',  # Spatial adaptive quantization
-        '-temporal-aq', '1',  # Temporal adaptive quantization
-        '-aq-strength', '8',  # AQ strength (1-15, higher = more)
-        '-rc-lookahead', '32',  # Lookahead frames for better quality
-        '-b_ref_mode', 'middle',  # B-frame reference mode
-        '-bf', '4',  # Number of B-frames
-        '-tag:v', 'hvc1',  # For Apple compatibility
-        '-c:a', 'aac',
-        '-ac', '1',
-        '-ar', '22050',
-        '-b:a', f'{audio_bitrate_kbps}k',
-        '-movflags', '+faststart',
-    ]
-    
-    if two_pass:
-        # Two-pass encoding with NVENC
-        tmpdir = 'tmp'
-        if not os.path.exists(tmpdir):
-            os.makedirs(tmpdir)
-        stats_file = os.path.join(tmpdir, 'nvenc_stats')
+    def run_encode(enc_width: int, enc_height: int, enc_fps: float, 
+                   bitrate_kbps: int, output_path: str, pass_name: str = "Encoding") -> bool:
+        """Run the actual encode with given parameters."""
+        bufsize_kbps = max(bitrate_kbps, 300)
+        vf_string = f'scale={enc_width}:{enc_height}:flags=lanczos,fps={enc_fps}'
         
-        # First pass
-        print("Running first pass...")
-        pass1_args = [
+        base_args = [
             'ffmpeg',
             '-y',
             '-i', input_file,
@@ -312,59 +287,145 @@ def encode_video(
             '-profile:v', 'main10',
             '-pix_fmt', 'p010le',
             '-rc', 'vbr',
-            '-b:v', f'{video_bitrate_kbps}k',
-            '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
-            '-bufsize', f'{bufsize_kbps}k',
             '-spatial-aq', '1',
             '-temporal-aq', '1',
+            '-aq-strength', '8',
             '-rc-lookahead', '32',
-            '-multipass', 'fullres',
-            '-an',  # No audio in first pass
-            '-f', 'null',
-            '/dev/null' if os.name != 'nt' else 'NUL'
+            '-b_ref_mode', 'middle',
+            '-bf', '4',
+            '-tag:v', 'hvc1',
+            '-c:a', 'aac',
+            '-ac', '1',
+            '-ar', '22050',
+            '-b:a', f'{audio_bitrate_kbps}k',
+            '-movflags', '+faststart',
         ]
         
-        result = subprocess.run(pass1_args, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"First pass failed: {result.stderr}")
-            # Fall back to single pass
-            print("Falling back to single-pass encoding...")
-            return encode_video(
-                input_file, output_file, width, height, fps,
-                video_bitrate_kbps, audio_bitrate_kbps, two_pass=False
-            )
+        if two_pass:
+            # First pass (analysis)
+            print(f"{pass_name}: Running analysis pass...")
+            pass1_args = [
+                'ffmpeg',
+                '-y',
+                '-i', input_file,
+                '-vf', vf_string,
+                '-c:v', 'hevc_nvenc',
+                '-preset', 'p7',
+                '-tune', 'hq',
+                '-profile:v', 'main10',
+                '-pix_fmt', 'p010le',
+                '-rc', 'vbr',
+                '-b:v', f'{bitrate_kbps}k',
+                '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
+                '-bufsize', f'{bufsize_kbps}k',
+                '-spatial-aq', '1',
+                '-temporal-aq', '1',
+                '-rc-lookahead', '32',
+                '-multipass', 'fullres',
+                '-an',
+                '-f', 'null',
+                '/dev/null' if os.name != 'nt' else 'NUL'
+            ]
+            
+            result = subprocess.run(pass1_args, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Analysis pass failed: {result.stderr}")
+                return False
+            
+            # Second pass (encode)
+            print(f"{pass_name}: Running encode pass...")
+            pass2_args = base_args + [
+                '-b:v', f'{bitrate_kbps}k',
+                '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
+                '-bufsize', f'{bufsize_kbps}k',
+                '-multipass', 'fullres',
+                output_path
+            ]
+            
+            result = subprocess.run(pass2_args, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Encode pass failed: {result.stderr}")
+                return False
+        else:
+            # Single pass
+            print(f"{pass_name}...")
+            single_args = base_args + [
+                '-b:v', f'{bitrate_kbps}k',
+                '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
+                '-bufsize', f'{bufsize_kbps}k',
+                '-multipass', 'fullres',
+                output_path
+            ]
+            
+            result = subprocess.run(single_args, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Encoding failed: {result.stderr}")
+                return False
         
-        # Second pass
-        print("Running second pass...")
-        pass2_args = base_args + [
-            '-b:v', f'{video_bitrate_kbps}k',
-            '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
-            '-bufsize', f'{bufsize_kbps}k',
-            '-multipass', 'fullres',
-            output_file
-        ]
-        
-        result = subprocess.run(pass2_args, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Second pass failed: {result.stderr}")
-            return False
-    else:
-        # Single pass encoding
-        print("Encoding video...")
-        single_args = base_args + [
-            '-b:v', f'{video_bitrate_kbps}k',
-            '-maxrate', f'{int(video_bitrate_kbps * 1.5)}k',
-            '-bufsize', f'{bufsize_kbps}k',
-            '-multipass', 'fullres',  # Still use multipass analysis in single output
-            output_file
-        ]
-        
-        result = subprocess.run(single_args, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Encoding failed: {result.stderr}")
-            return False
+        return True
     
-    return True
+    # If no target size specified, just do a normal encode
+    if target_bytes is None:
+        return run_encode(width, height, fps, video_bitrate_kbps, output_file, "Encoding video")
+    
+    # Create temp directory for calibration encode
+    tmpdir = 'tmp'
+    if not os.path.exists(tmpdir):
+        os.makedirs(tmpdir)
+    temp_output = os.path.join(tmpdir, 'calibration_encode.mp4')
+    
+    # First encode: calibration pass
+    print("Pass 1/2: Calibration encode...")
+    if not run_encode(width, height, fps, video_bitrate_kbps, temp_output, "Calibration"):
+        return False
+    
+    # Measure actual size
+    actual_size = os.path.getsize(temp_output)
+    size_ratio = target_bytes / actual_size
+    size_diff = abs(1.0 - size_ratio)
+    
+    print(f"  Calibration result: {actual_size / 1024:.1f} KB (target: {target_bytes / 1024:.1f} KB)")
+    print(f"  Ratio: {size_ratio:.3f} (diff: {size_diff * 100:.1f}%)")
+    
+    # If within tolerance, just move the temp file
+    if size_diff <= size_tolerance:
+        print(f"  Within {size_tolerance * 100:.0f}% tolerance, using calibration encode.")
+        import shutil
+        shutil.move(temp_output, output_file)
+        return True
+    
+    # Clean up calibration file
+    if os.path.exists(temp_output):
+        os.remove(temp_output)
+    
+    # Calculate adjusted target bytes based on measured ratio
+    adjusted_target_bytes = int(target_bytes * size_ratio)
+    
+    # Recalculate optimal parameters if video_info is available
+    if video_info is not None:
+        new_width, new_height, new_fps, new_bitrate = calculate_optimal_params(
+            video_info,
+            adjusted_target_bytes,
+            audio_bitrate_kbps,
+            fixed_fps=fixed_fps
+        )
+        
+        if new_width != width or new_height != height or new_fps != fps:
+            print(f"  Resolution upgrade: {width}x{height}@{fps} -> {new_width}x{new_height}@{new_fps}")
+        
+        width, height, fps = new_width, new_height, new_fps
+        adjusted_bitrate = new_bitrate
+    else:
+        # Just adjust bitrate without recalculating resolution
+        adjusted_bitrate = int(video_bitrate_kbps * size_ratio)
+    
+    print(f"  Adjusted bitrate: {video_bitrate_kbps} -> {adjusted_bitrate} kbps")
+    
+    # Final encode with adjusted parameters
+    print("Pass 2/2: Final encode with adjusted parameters...")
+    success = run_encode(width, height, fps, adjusted_bitrate, output_file, "Final encode")
+    
+    return success
 
 
 def format_size(bytes_val: int) -> str:
@@ -491,7 +552,10 @@ Examples:
         fps,
         video_bitrate,
         args.audio_bitrate,
-        two_pass=not args.single_pass
+        two_pass=not args.single_pass,
+        target_bytes=target_bytes,
+        video_info=video_info,
+        fixed_fps=args.fps
     )
     
     if not success:
