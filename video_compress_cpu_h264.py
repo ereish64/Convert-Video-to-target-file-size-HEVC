@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Video Optimizer - Encode video to target file size with maximum quality
+Video Optimizer - Encode video to target file size with maximum quality (H.264)
 
 Usage:
-    python video_optimizer.py <target_size> <input_file> <output_file>
+    python video_compress_cpu_h264.py <target_size> <input_file> <output_file>
     
     target_size: Target file size with unit (e.g., 10MB, 500KB, 1GB)
     input_file: Path to input video file
@@ -14,7 +14,7 @@ How it works:
     Calculate optimal encoding parameters (resolution, fps, video bitrate) to meet target size.
     Target size is calculated to fit within a specified list of resolution and fps tiers.
 
-    Second pass: Encode video using ffmpeg with H.265 codec with calculated parameters from first pass
+    Second pass: Encode video using ffmpeg with H.264 codec with calculated parameters from first pass
 """
 
 import argparse
@@ -161,9 +161,9 @@ def calculate_optimal_params(
     # Determine effective FPS for minimum bitrate calculation
     # Use fixed_fps if provided, otherwise use source fps
     effective_fps = fixed_fps if fixed_fps is not None else video_info.fps
-    # Scale minimum bitrate by fps (base assumption: 30fps needs 50kbps minimum)
+    # Scale minimum bitrate by fps (base assumption: 30fps needs 75kbps minimum for H.264)
     fps_factor = effective_fps / 30.0
-    min_video_bitrate = max(50 * fps_factor, 20)  # Floor at 20 kbps absolute minimum
+    min_video_bitrate = max(75 * fps_factor, 30)  # Floor at 30 kbps absolute minimum
     
     if video_bitrate_kbps < min_video_bitrate:
         raise ValueError(
@@ -172,15 +172,16 @@ def calculate_optimal_params(
             f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
         )
     
-    # Define resolution/fps tiers with recommended minimum bitrates for H.265
+    # Define resolution/fps tiers with recommended minimum bitrates for H.264
+    # H.264 typically needs ~30-50% more bitrate than H.265 for equivalent quality
     # Format: (width, height, min_bitrate_kbps, ideal_bitrate_kbps)
     resolution_tiers = [
-        (1920, 1080, 1500, 4000),  # 1080p
-        (1280, 720, 800, 2500),    # 720p
-        (854, 480, 400, 1200),     # 480p
-        (640, 360, 200, 700),      # 360p
-        (426, 240, 100, 400),      # 240p
-        (320, 180, 50, 200),       # 180p
+        (1920, 1080, 2500, 6000),  # 1080p
+        (1280, 720, 1200, 4000),   # 720p
+        (854, 480, 600, 1800),     # 480p
+        (640, 360, 300, 1000),     # 360p
+        (426, 240, 150, 600),      # 240p
+        (320, 180, 75, 300),       # 180p
     ]
     
     fps_tiers = [60, 30, 24, 15, 10]
@@ -240,8 +241,8 @@ def calculate_optimal_params(
             # Bits per pixel (higher is better quality)
             bpp = (video_bitrate_kbps * 1000) / pixels_per_sec
             
-            # H.265 typically needs 0.03-0.1 bpp for decent quality
-            if bpp >= 0.03:
+            # H.264 typically needs 0.05-0.15 bpp for decent quality (higher than H.265)
+            if bpp >= 0.05:
                 best_fps = fps
                 break
     
@@ -264,7 +265,7 @@ def encode_video(
     size_tolerance: float = 0.05
 ) -> bool:
     """
-    Encode video with specified parameters using libx265 (CPU).
+    Encode video with specified parameters using libx264 (CPU).
     
     If target_bytes is provided, will do an additional calibration pass
     to adjust for bitrate inaccuracy.
@@ -288,11 +289,10 @@ def encode_video(
             '-y',
             '-i', input_file,
             '-vf', vf_string,
-            '-c:v', 'libx265',
+            '-c:v', 'libx264',
             '-preset', 'slow',
-            '-profile:v', 'main',
+            '-profile:v', 'high',
             '-pix_fmt', 'yuv420p',
-            '-tag:v', 'hvc1',
             '-c:a', 'aac',
             '-ac', '1',
             '-ar', '22050',
@@ -307,7 +307,9 @@ def encode_video(
                 '-b:v', f'{bitrate_kbps}k',
                 '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
                 '-bufsize', f'{bufsize_kbps}k',
-                '-x265-params', f'pass=1:stats={passlog}:aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
+                '-pass', '1',
+                '-passlogfile', passlog,
+                '-x264opts', 'aq-mode=3:aq-strength=1.0:psy-rd=1.0,0.15:rc-lookahead=40:bframes=3:b-adapt=2:subme=9:deblock=-1,-1',
                 '-an',
                 '-f', 'null',
                 '/dev/null' if os.name != 'nt' else 'NUL'
@@ -324,7 +326,9 @@ def encode_video(
                 '-b:v', f'{bitrate_kbps}k',
                 '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
                 '-bufsize', f'{bufsize_kbps}k',
-                '-x265-params', f'pass=2:stats={passlog}:aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
+                '-pass', '2',
+                '-passlogfile', passlog,
+                '-x264opts', 'aq-mode=3:aq-strength=1.0:psy-rd=1.0,0.15:rc-lookahead=40:bframes=3:b-adapt=2:subme=9:deblock=-1,-1',
                 output_path
             ]
             
@@ -339,7 +343,7 @@ def encode_video(
                 '-b:v', f'{bitrate_kbps}k',
                 '-maxrate', f'{int(bitrate_kbps * 1.5)}k',
                 '-bufsize', f'{bufsize_kbps}k',
-                '-x265-params', 'aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=32:bframes=4:b-adapt=2:subme=7:deblock=-1,-1',
+                '-x264opts', 'aq-mode=3:aq-strength=1.0:psy-rd=1.0,0.15:rc-lookahead=40:bframes=3:b-adapt=2:subme=9:deblock=-1,-1',
                 output_path
             ]
             
@@ -406,7 +410,7 @@ def format_size(bytes_val: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Optimize video encoding for a target file size',
+        description='Optimize video encoding for a target file size (H.264)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -502,7 +506,7 @@ Examples:
     print(f"  FPS: {fps}" + (" (fixed)" if args.fps is not None else " (auto)"))
     print(f"  Video bitrate: {video_bitrate} kbps")
     print(f"  Audio bitrate: {args.audio_bitrate} kbps")
-    print(f"  Encoder: libx265 (10-bit)")
+    print(f"  Encoder: libx264 (8-bit)")
     
     # Calculate expected file size
     expected_size = int((video_bitrate + args.audio_bitrate) * video_info.duration * 1000 / 8)
@@ -532,6 +536,6 @@ Examples:
     print(f"  Target size: {format_size(target_bytes)}")
     print(f"  Actual size: {format_size(actual_size)}")
     print(f"  Difference: {(actual_size - target_bytes) / target_bytes * 100:+.1f}%")
-    
+
 if __name__ == '__main__':
     main()
