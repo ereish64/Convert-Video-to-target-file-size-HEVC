@@ -502,7 +502,7 @@ Examples:
     print(f"  FPS: {fps}" + (" (fixed)" if args.fps is not None else " (auto)"))
     print(f"  Video bitrate: {video_bitrate} kbps")
     print(f"  Audio bitrate: {args.audio_bitrate} kbps")
-    print(f"  Encoder: libx265 (10-bit)")
+    print(f"  Encoder: libx265 (8-bit)")
     
     # Calculate expected file size
     expected_size = int((video_bitrate + args.audio_bitrate) * video_info.duration * 1000 / 8)
