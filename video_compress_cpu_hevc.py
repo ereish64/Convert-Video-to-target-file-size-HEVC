@@ -165,12 +165,12 @@ def calculate_optimal_params(
     fps_factor = effective_fps / 30.0
     min_video_bitrate = max(50 * fps_factor, 20)  # Floor at 20 kbps absolute minimum
     
-    if video_bitrate_kbps < min_video_bitrate:
-        raise ValueError(
-            f"Target size too small. Need at least "
-            f"{int((min_video_bitrate + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
-            f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
-        )
+    # if video_bitrate_kbps < min_video_bitrate:
+    #     raise ValueError(
+    #         f"Target size too small. Need at least "
+    #         f"{int((min_video_bitrate + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
+    #         f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
+    #     )
     
     # Define resolution/fps tiers with recommended minimum bitrates for H.265
     # Format: (width, height, min_bitrate_kbps, ideal_bitrate_kbps)

@@ -160,12 +160,12 @@ def calculate_optimal_params(
     fps_factor = effective_fps / 30.0
     min_video_bitrate = max(40 * fps_factor, 15)  # Floor at 15 kbps absolute minimum (AV1 is more efficient)
     
-    if video_bitrate_kbps < min_video_bitrate:
-        raise ValueError(
-            f"Target size too small. Need at least "
-            f"{int((min_video_bitrate + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
-            f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
-        )
+    # if video_bitrate_kbps < min_video_bitrate:
+    #     raise ValueError(
+    #         f"Target size too small. Need at least "
+    #         f"{int((min_video_bitrate + audio_bitrate_kbps) * video_info.duration * 1000 / 8 / 1024)}KB "
+    #         f"for a {video_info.duration:.1f}s video at {effective_fps:.1f}fps"
+    #     )
     
     # Define resolution/fps tiers with recommended minimum bitrates for AV1
     # AV1 is ~30% more efficient than H.265, so lower bitrate thresholds
